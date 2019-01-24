@@ -17,6 +17,8 @@ fn main() -> Result< (), NngFail >
 
 	pair.send( mesg )?;
 
+	std::thread::sleep( std::time::Duration::from_millis( 500 ) );
+
 	println!( "PeerC: stopping." );
 
 	Ok(())

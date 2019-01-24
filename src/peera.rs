@@ -2,7 +2,8 @@
 /// Problems:
 /// 1. mesg.append takes a *const u8
 /// 2. NngFail is not compatible with failure::Error
-///
+/// 3. protocol::pair1::Pair1 does not implement Debug, and probably not all the other usefull derived stuff (https://doc.rust-lang.org/book/appendix-03-derivable-traits.html?highlight=derivable,traits#appendix-c-derivable-traits)
+/// 4. There is no connection close? pair.dial, but not pair.close?
 
 use runng::*;
 use actix::{ Actor, Arbiter, SyncArbiter };
@@ -15,9 +16,15 @@ fn main() -> Result< (), NngFail >
 	let system = actix::System::new( "Ekke_Actix_System" );
 
 	let processor = SyncArbiter::start( 1, move || Processor{} );
-	let peer_b    = SyncArbiter::start( 1, move || Peer::new( processor.clone(), "ipc:///tmp/peerAB" ).unwrap() );
 
-	let run_b = peer_b.send( Run{} );
+	let pb = Peer::new( processor.clone(), "ipc:///tmp/peerAB" )?;
+	let pc = Peer::new( processor.clone(), "ipc:///tmp/peerAC" )?;
+
+	let peer_b = SyncArbiter::start( 1, move || pb.clone() );
+	let peer_c = SyncArbiter::start( 1, move || pc.clone() );
+
+	let run_b  = peer_b.send( Run{} );
+	let run_c  = peer_c.send( Run{} );
 
 	Arbiter::spawn
 	(
@@ -26,6 +33,20 @@ fn main() -> Result< (), NngFail >
 			match res
 			{
 				Ok (_) => println! ( "The PeerB was successfully started." ),
+				Err(_) => eprintln!( "An Error occurred while trying to start PeerB." ),
+			}
+		})
+
+			.map_err( |_| ())
+	);
+
+	Arbiter::spawn
+	(
+		run_c.map( |res|
+		{
+			match res
+			{
+				Ok (_) => println! ( "The PeerC was successfully started." ),
 				Err(_) => eprintln!( "An Error occurred while trying to start PeerB." ),
 			}
 		})
@@ -88,7 +109,8 @@ impl actix::Handler< StringMessage > for Processor
 
 
 
-
+#[ derive( Clone )]
+//
 pub struct Peer
 {
 	processor: actix::Addr< Processor >,
