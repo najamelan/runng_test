@@ -1,25 +1,177 @@
-use runng::*;
+/// Simple test case for runng
+/// Problems:
+/// 1. mesg.append takes a *const u8
+/// 2. NngFail is not compatible with failure::Error
+///
 
+use runng::*;
+use actix::{ Actor, Arbiter, SyncArbiter };
+use futures::future::Future;
 
 fn main() -> Result< (), NngFail >
 {
 	println!( "PeerA: starting." );
 
-	const URLB: &str = "ipc:///tmp/peerAB";
-	// const URLC: &str = "ipc:///tmp/peerAC";
+	let system = actix::System::new( "Ekke_Actix_System" );
 
-	let factory = Latest::default();
+	let processor = SyncArbiter::start( 1, move || Processor{} );
+	let peer_b    = SyncArbiter::start( 1, move || Peer::new( processor.clone(), "ipc:///tmp/peerAB" ).unwrap() );
 
-	let pair_b   = factory.pair_open()?.listen( &URLB )?;
-	// let pair_c   = factory.pair_open()?.listen( &URLC )?;
+	let run_b = peer_b.send( Run{} );
 
-	let mut received_b = pair_b.recv()?;
+	Arbiter::spawn
+	(
+		run_b.map( |res|
+		{
+			match res
+			{
+				Ok (_) => println! ( "The PeerB was successfully started." ),
+				Err(_) => eprintln!( "An Error occurred while trying to start PeerB." ),
+			}
+		})
+
+			.map_err( |_| ())
+	);
+
+
+
 	// let mut received_c = pair_c.recv()?;
 
-	println!( "PeerA: Received message: {:#?}", std::str::from_utf8( received_b.body() ) );
+	//println!( "PeerA: Received message: {:#?}", std::str::from_utf8( received_b.body() ) );
 	// println!( "PeerA: Received message: {:#?}", std::str::from_utf8( received_c.body() ) );
+
+	system.run();
 
 	println!( "PeerA: stopping." );
 
 	Ok(())
 }
+
+
+
+
+
+pub struct Processor {}
+
+impl Actor for Processor
+{
+	type Context = actix::SyncContext< Self >;
+}
+
+
+#[ derive( Debug ) ]
+//
+pub struct StringMessage
+{
+	body: String,
+}
+
+
+impl actix::Message for StringMessage
+{
+	type Result = Result< (), failure::Error >;
+}
+
+
+impl actix::Handler< StringMessage > for Processor
+{
+	type Result = Result< (), failure::Error >;
+
+	fn handle( &mut self, msg: StringMessage, _: &mut Self::Context ) -> Self::Result
+	{
+		println!( "Received message: {:?}", &msg );
+
+		Ok(())
+	}
+}
+
+
+
+
+
+pub struct Peer
+{
+	processor: actix::Addr< Processor >,
+	uri      : String                  ,
+	pair     : protocol::pair1::Pair1  ,
+
+}
+
+
+impl Peer
+{
+	pub fn new( processor: actix::Addr< Processor >, url: &str ) -> Result< Self, result::NngFail >
+	{
+		let pair   = Latest::default().pair_open()?.listen( url )?;
+		let uri    = url.to_string();
+
+		Ok
+		(
+			Self
+			{
+				processor ,
+				uri       ,
+				pair      ,
+			}
+		)
+	}
+}
+
+
+impl Actor for Peer
+{
+	type Context = actix::SyncContext< Self >;
+}
+
+
+#[ derive( Debug ) ]
+//
+pub struct Run {}
+
+
+impl actix::Message for Run
+{
+	type Result = Result< (), NngFail >;
+}
+
+
+impl actix::Handler< Run > for Peer
+{
+	type Result = Result< (), NngFail >;
+
+	fn handle( &mut self, _: Run, _: &mut Self::Context ) -> Self::Result
+	{
+		println!( "Start listening for messages on: {:?}", self.uri );
+
+		loop
+		{
+			let mut recv = self.pair.recv()?;
+
+			println!( "peerA: We received a message." );
+
+			let string   = std::str::from_utf8( recv.body() ).expect( "A valid string" ).to_string();
+
+			// send the message to the processor
+			//
+			let res = self.processor.send( StringMessage{ body: string } );
+
+			Arbiter::spawn
+			(
+				res.map( |res|
+				{
+					match res
+					{
+						Ok (_) => println! ( "peerA: Successfully forwarded message to processor." ),
+						Err(_) => eprintln!( "An Error occurred while trying to forward message to processor." ),
+					}
+				})
+
+					.map_err( |_| ())
+			);
+		}
+
+		// Ok(())
+	}
+}
+
+
